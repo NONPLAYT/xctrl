@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ username }}</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🔑</text></svg>">
+<style>
+  :root {
+    --bg: #0f1113; --panel: #17191d; --line: #24272c;
+    --text: #e6e8ea; --muted: #8b9096; --accent: #6ea8fe; --warn: #e5a14b;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6f8; --panel: #ffffff; --line: #e2e5ea;
+      --text: #1a1d21; --muted: #6b7280; --accent: #2563eb; --warn: #b45309;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem; background: var(--bg); color: var(--text);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; justify-content: center;
+  }
+  main { width: 100%; max-width: 30rem; }
+  h1 { margin: 0; font-size: 1.4rem; font-weight: 600; }
+  .sub { color: var(--muted); font-size: .9rem; margin-top: .15rem; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; padding: 1rem; margin-top: 1rem;
+  }
+  .banner {
+    border-color: var(--warn); color: var(--warn);
+    display: flex; gap: .5rem; align-items: baseline;
+  }
+  .banner a { color: inherit; }
+  .qr { display: flex; justify-content: center; padding: .5rem 0 1rem; }
+  .qr svg { width: 190px; height: 190px; }
+  .row {
+    display: flex; align-items: center; gap: .7rem; width: 100%;
+    padding: .7rem .8rem; margin-top: .4rem; text-align: left;
+    background: transparent; color: inherit; font: inherit; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 9px;
+  }
+  .row:hover { border-color: var(--accent); }
+  .row:active { transform: translateY(1px); }
+  .row .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .hint { color: var(--muted); font-size: .8rem; }
+  .label { color: var(--muted); font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+  .meter { height: 6px; background: var(--line); border-radius: 99px; overflow: hidden; margin: .6rem 0 .4rem; }
+  .meter > span { display: block; height: 100%; background: var(--accent); }
+  .stats { display: flex; justify-content: space-between; font-size: .85rem; color: var(--muted); }
+  footer { color: var(--muted); font-size: .8rem; text-align: center; margin-top: 1.2rem; }
+  footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>{{ username }}</h1>
+  <div class="sub">группа {{ group }}{% if expires %} · действует до {{ expires }}{% endif %}</div>
+
+  {% if blocked %}
+  <div class="card banner">
+    <span>⚠️</span>
+    <span>Доступ приостановлен. <a href="{{ support_url }}">Написать в поддержку</a></span>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <div class="qr">{{ qr|safe }}</div>
+    <div class="label">Ссылка подписки</div>
+    <button class="row" data-copy="{{ sub_url }}">
+      <span class="name">{{ sub_url }}</span>
+      <span class="hint">копировать</span>
+    </button>
+  </div>
+
+  {% if limit %}
+  <div class="card">
+    <div class="label">Трафик</div>
+    <div class="meter"><span style="width: {{ percent }}%"></span></div>
+    <div class="stats">
+      <span>{{ used }} из {{ limit }}</span>
+      <span>сброс {{ next_reset }}</span>
+    </div>
+  </div>
+  {% else %}
+  <div class="card">
+    <div class="label">Трафик</div>
+    <div class="stats"><span>{{ used }}</span><span>без лимита</span></div>
+  </div>
+  {% endif %}
+
+  {% if links %}
+  <div class="card">
+    <div class="label">Серверы</div>
+    {% for l in links %}
+    <button class="row" data-copy="{{ l.uri }}">
+      <span>{{ l.flag }}</span>
+      <span class="name">{{ l.node }}</span>
+      <span class="hint">копировать</span>
+    </button>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <footer><a href="{{ support_url }}">поддержка</a></footer>
+</main>
+<script>
+  document.querySelectorAll('[data-copy]').forEach(function (el) {
+    el.addEventListener('click', function () {
+      var hint = el.querySelector('.hint');
+      navigator.clipboard.writeText(el.dataset.copy).then(function () {
+        if (!hint) return;
+        var was = hint.textContent;
+        hint.textContent = 'скопировано';
+        setTimeout(function () { hint.textContent = was; }, 1200);
+      });
+    });
+  });
+</script>
+</body>
+</html>
