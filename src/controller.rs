@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 
 use crate::config::Config;
 use crate::remote;
-use crate::state::{self, Ledger, Usage};
+use crate::state::{self, Ledger, Traffic, Usage};
 
 const LEDGER_FILE: &str = "ledger.json";
 const POLL: Duration = Duration::from_secs(60);
@@ -69,7 +69,7 @@ impl Controller {
             ledger.reset_at = Some(self.cfg.quota.period_start(now));
         } else if self.cfg.quota.is_due(ledger.reset_at, now) {
             eprintln!("quota period rolled over, clearing counters");
-            ledger.used.clear();
+            ledger.spent.clear();
             ledger.limited.clear();
             ledger.reset_at = Some(self.cfg.quota.period_start(now));
         }
@@ -95,7 +95,7 @@ impl Controller {
             let Some(limit) = self.cfg.limit_of(user) else {
                 continue;
             };
-            let used = ledger.used.get(&user.name).copied().unwrap_or(0);
+            let used = ledger.spent_by(&user.name).total();
             if used >= limit {
                 if ledger.limited.insert(user.name.clone()) {
                     eprintln!("{} exhausted quota ({used} of {limit} bytes)", user.name);
@@ -144,15 +144,8 @@ impl Controller {
         Ok(())
     }
 
-    /// Bytes spent this period by a user.
-    pub async fn used_by(&self, user: &str) -> u64 {
-        self.ledger
-            .read()
-            .await
-            .used
-            .get(user)
-            .copied()
-            .unwrap_or(0)
+    pub async fn spent_by(&self, user: &str) -> Traffic {
+        self.ledger.read().await.spent_by(user)
     }
 }
 

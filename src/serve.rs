@@ -214,7 +214,7 @@ async fn subscription(
     let format = pinned.unwrap_or_else(|| detect::detect(&ua));
     eprintln!("sub {} -> {} (ua: {ua})", user.name, format.as_str());
     let rendered = subgen::render(cfg, format, user, &endpoints);
-    let (up, down) = split_traffic(&app, &user.name).await;
+    let spent = app.ctl.spent_by(&user.name).await;
     let limit = cfg.limit_of(user).unwrap_or(0);
     let expire = user
         .expires
@@ -231,7 +231,10 @@ async fn subscription(
             ),
             (
                 header::HeaderName::from_static("subscription-userinfo"),
-                format!("upload={up}; download={down}; total={limit}; expire={expire}"),
+                format!(
+                    "upload={}; download={}; total={limit}; expire={expire}",
+                    spent.up, spent.down
+                ),
             ),
             (
                 header::HeaderName::from_static("profile-update-interval"),
@@ -253,16 +256,6 @@ fn profile_title(cfg: &Config, user: &User, cut_off: bool) -> String {
         Some(t) => format!("{warn}{}", t.replace("{user}", &user.name)),
         None => format!("{warn}{} \u{2014} {}", cfg.sub_domain, user.name),
     }
-}
-
-async fn split_traffic(app: &App, user: &str) -> (u64, u64) {
-    app.ctl
-        .nodes
-        .read()
-        .await
-        .values()
-        .filter_map(|usage| usage.users.get(user))
-        .fold((0, 0), |(up, down), t| (up + t.up, down + t.down))
 }
 
 async fn dashboard(
@@ -296,7 +289,7 @@ async fn dashboard(
         })
         .collect();
 
-    let used = app.ctl.used_by(&user.name).await;
+    let used = app.ctl.spent_by(&user.name).await.total();
     let limit = cfg.limit_of(user);
     let page = app
         .env

@@ -102,7 +102,7 @@ pub async fn ls(cfg: &Config) -> Result<()> {
         } else {
             "-"
         };
-        let used = snap.ledger.used.get(&user.name).copied().unwrap_or(0);
+        let used = snap.ledger.spent_by(&user.name).total();
         let limit = snap
             .limits
             .get(&user.name)
