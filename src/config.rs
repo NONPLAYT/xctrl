@@ -55,7 +55,20 @@ pub struct ClashProfile {
     /// url-test group offered first inside the selector. Omit to skip it.
     #[serde(default)]
     pub auto: Option<String>,
+    /// Extra selectors, each holding only the endpoints of one scheme. Lets a
+    /// profile send part of its traffic over a different protocol -- a UDP one
+    /// for voice, say -- while the main selector still spans everything.
+    #[serde(default)]
+    pub groups: Vec<ClashGroup>,
     pub profile: String,
+}
+
+/// One scheme-filtered selector. Empty of members it is left out entirely: a
+/// mihomo group with no proxies fails to load.
+#[derive(Clone, Deserialize)]
+pub struct ClashGroup {
+    pub name: String,
+    pub scheme: String,
 }
 
 /// A tenant: a set of users served by a set of node inbounds.
@@ -89,6 +102,12 @@ pub struct Inbound {
     pub group: String,
     /// xray inbound tag, the handle used over the gRPC handler API.
     pub tag: String,
+    /// Appended to the node label so two inbounds of one node serving one group
+    /// stay distinguishable in a client. Absent leaves the label untouched,
+    /// which is what a single-inbound node wants -- changing it would reshuffle
+    /// every subscriber's stored selection.
+    #[serde(default)]
+    pub suffix: Option<String>,
     pub link: Link,
 }
 

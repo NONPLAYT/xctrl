@@ -22,7 +22,7 @@ use tokio::time::Instant;
 
 use crate::config::{Config, Inbound};
 use crate::state::{self, Usage};
-use crate::xray::Xray;
+use crate::xray::{Credential, Xray};
 
 const TICK: Duration = Duration::from_secs(60);
 /// Collecting resets xray's counters, so back-to-back polls would shred the
@@ -203,9 +203,12 @@ async fn sync(agent: &Agent) -> Result<()> {
 
         let flow = inbound.link.params.get("flow").cloned().unwrap_or_default();
         for user in desired.iter().filter(|u| !actual.contains(&u.name)) {
+            // A user's key is one secret whatever the inbound speaks: a uuid to
+            // vless, the auth password to hysteria.
+            let credential = Credential::of(&inbound.link.scheme, &user.uuid, &flow)?;
             agent
                 .xray
-                .add_user(&inbound.tag, &user.name, &user.uuid, &flow)
+                .add_user(&inbound.tag, &user.name, credential)
                 .await?;
             eprintln!("{}: + {} ({})", agent.node, user.name, inbound.tag);
         }

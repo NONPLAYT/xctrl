@@ -23,6 +23,9 @@ pub struct Endpoint {
     /// Node name, used as the proxy label together with the flag.
     pub node: String,
     pub flag: String,
+    /// Tail of the label, set when one node offers this group more than one
+    /// inbound and the two would otherwise collide.
+    pub suffix: Option<String>,
     pub scheme: String,
     /// Resolved IP when available, otherwise the FQDN.
     pub address: String,
@@ -32,13 +35,19 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    /// Display label, e.g. `🇸🇪 stockholm`.
+    /// Display label, e.g. `🇸🇪 stockholm`. Doubles as the proxy name in every
+    /// dialect, so two endpoints must never produce the same one.
     pub fn label(&self) -> String {
-        if self.flag.is_empty() {
+        let mut label = if self.flag.is_empty() {
             self.node.clone()
         } else {
             format!("{} {}", self.flag, self.node)
+        };
+        if let Some(suffix) = &self.suffix {
+            label.push(' ');
+            label.push_str(suffix);
         }
+        label
     }
 
     pub fn param(&self, key: &str) -> &str {
@@ -92,6 +101,7 @@ pub fn build_endpoints(
             Some(Endpoint {
                 node: node.name.clone(),
                 flag: node.flag.clone(),
+                suffix: inbound.suffix.clone(),
                 scheme: inbound.link.scheme.clone(),
                 address,
                 port: inbound.link.port,
@@ -135,6 +145,7 @@ pub fn blocked_endpoint(support_url: &str) -> Endpoint {
     Endpoint {
         node: format!("blocked — {support_url}"),
         flag: "⚠️".into(),
+        suffix: None,
         scheme: "vless".into(),
         address: "127.0.0.1".into(),
         port: 1,
@@ -153,6 +164,7 @@ pub(crate) mod tests {
         Endpoint {
             node: "stockholm".into(),
             flag: "🇸🇪".into(),
+            suffix: None,
             scheme: "vless".into(),
             address: "203.0.113.7".into(),
             port: 8443,
@@ -168,6 +180,24 @@ pub(crate) mod tests {
             .into_iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect(),
+        }
+    }
+
+    /// The second inbound of the same node: hysteria2 beside the reality one,
+    /// carrying the suffix that keeps the two labels apart.
+    pub fn sample_hysteria() -> Endpoint {
+        Endpoint {
+            node: "stockholm".into(),
+            flag: "🇸🇪".into(),
+            suffix: Some("udp".into()),
+            scheme: "hysteria2".into(),
+            address: "203.0.113.7".into(),
+            port: 443,
+            uuid: "00000000-0000-0000-0000-000000000001".into(),
+            params: [("sni", "example.test")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
         }
     }
 
@@ -196,6 +226,7 @@ pub(crate) mod tests {
               "clash": {
                 "selector": "TEST",
                 "auto": "auto",
+                "groups": [ { "name": "TEST-UDP", "scheme": "hysteria2" } ],
                 "profile": "mode: rule\nrules:\n  - MATCH,TEST"
               },
               "groups": [
@@ -209,7 +240,10 @@ pub(crate) mod tests {
                   "inbounds": [
                     { "group": "main", "tag": "vless-main",
                       "link": { "scheme": "vless", "port": 8443,
-                                "params": { "security": "reality", "flow": "xtls-rprx-vision" } } }
+                                "params": { "security": "reality", "flow": "xtls-rprx-vision" } } },
+                    { "group": "main", "tag": "hysteria-main", "suffix": "udp",
+                      "link": { "scheme": "hysteria2", "port": 443,
+                                "params": { "sni": "stockholm.example.test" } } }
                   ]
                 },
                 {
@@ -250,10 +284,14 @@ pub(crate) mod tests {
         let cfg = sample_config();
         let address_of = |node: &str| Some(format!("{node}.example.test"));
 
+        // Two inbounds on one node means two endpoints, told apart by the suffix.
         let mine = build_endpoints(&cfg, cfg.user("me").unwrap(), address_of);
-        assert_eq!(mine.len(), 1);
-        assert_eq!(mine[0].node, "stockholm");
+        assert_eq!(mine.len(), 2);
+        assert!(mine.iter().all(|ep| ep.node == "stockholm"));
         assert_eq!(mine[0].param("flow"), "xtls-rprx-vision");
+        assert_eq!(mine[0].label(), "🇸🇪 stockholm");
+        assert_eq!(mine[1].scheme, "hysteria2");
+        assert_eq!(mine[1].label(), "🇸🇪 stockholm udp");
 
         let theirs = build_endpoints(&cfg, cfg.user("buddy").unwrap(), address_of);
         assert_eq!(theirs.len(), 1);
@@ -291,6 +329,9 @@ pub(crate) mod tests {
         let clash = cfg.clash.as_ref().expect("profile parsed");
         assert_eq!(clash.selector, "TEST");
         assert_eq!(clash.auto.as_deref(), Some("auto"));
+        assert_eq!(clash.groups.len(), 1);
+        assert_eq!(clash.groups[0].name, "TEST-UDP");
+        assert_eq!(clash.groups[0].scheme, "hysteria2");
         // The profile must own `rules:` and leave the proxies to the generator.
         assert!(clash.profile.contains("rules:"));
         assert!(!clash.profile.contains("proxies:"));

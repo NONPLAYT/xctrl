@@ -1,5 +1,5 @@
 use super::{Endpoint, Rendered};
-use crate::config::ClashProfile;
+use crate::config::{ClashGroup, ClashProfile};
 
 /// Selector name used when the operator supplies no profile of their own.
 const GROUP: &str = "XCTRL";
@@ -61,6 +61,10 @@ pub fn render(eps: &[Endpoint], meta: bool, profile: Option<&ClashProfile>) -> O
         }
     }
 
+    for group in profile.map(|p| p.groups.as_slice()).unwrap_or_default() {
+        out.push_str(&scheme_group(group, eps, meta, selector));
+    }
+
     match profile {
         Some(p) => {
             out.push('\n');
@@ -73,6 +77,34 @@ pub fn render(eps: &[Endpoint], meta: bool, profile: Option<&ClashProfile>) -> O
         body: out.into_bytes(),
         content_type: "text/yaml; charset=utf-8",
     })
+}
+
+/// A selector holding only the endpoints of one scheme.
+///
+/// It is emitted even with nothing to hold, pointing at the main selector
+/// instead: the profile's rules name it unconditionally, and a rule naming a
+/// group that does not exist fails the whole document. Falling back to the main
+/// selector also means a user whose group has no such inbound keeps working,
+/// just over the ordinary protocol.
+fn scheme_group(group: &ClashGroup, eps: &[Endpoint], meta: bool, selector: &str) -> String {
+    let members: Vec<String> = eps
+        .iter()
+        .filter(|ep| ep.scheme == group.scheme && proxy(ep, meta).is_some())
+        .map(|ep| quote(&ep.label()))
+        .collect();
+    let members = if members.is_empty() {
+        vec![quote(selector)]
+    } else {
+        members
+    };
+    let mut out = format!(
+        "  - name: {}\n    type: select\n    proxies:\n",
+        quote(&group.name)
+    );
+    for member in members {
+        out.push_str(&format!("      - {member}\n"));
+    }
+    out
 }
 
 /// Renders one proxy as a YAML list item, or `None` when this Clash dialect
@@ -100,6 +132,25 @@ fn proxy(ep: &Endpoint, meta: bool) -> Option<String> {
             kv.insert(1, ("type", "trojan".into()));
             kv.push(("password", quote(&ep.uuid)));
             kv.push(("udp", "true".into()));
+        }
+        // Hysteria2 is QUIC end to end: it carries its own TLS and has no
+        // transport to name, so it returns here rather than falling through to
+        // the tls/network tail below.
+        "hysteria2" | "hy2" => {
+            if !meta {
+                return None; // Meta-only, like vless
+            }
+            kv.insert(1, ("type", "hysteria2".into()));
+            kv.push(("password", quote(&ep.uuid)));
+            kv.push(("sni", quote(ep.sni())));
+            if ep.param("insecure") == "1" {
+                kv.push(("skip-cert-verify", "true".into()));
+            }
+            if !ep.param("obfs").is_empty() {
+                kv.push(("obfs", ep.param("obfs").into()));
+                kv.push(("obfs-password", quote(ep.param("obfs-password"))));
+            }
+            return Some(block(&kv));
         }
         _ => return None,
     }
@@ -143,7 +194,23 @@ fn quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subgen::tests::sample;
+    use crate::subgen::tests::{sample, sample_hysteria};
+
+    fn profile(groups: Vec<ClashGroup>) -> ClashProfile {
+        ClashProfile {
+            selector: "NEXON".into(),
+            auto: None,
+            groups,
+            profile: "rules:\n  - MATCH,NEXON".into(),
+        }
+    }
+
+    fn udp_group() -> Vec<ClashGroup> {
+        vec![ClashGroup {
+            name: "NEXON-UDP".into(),
+            scheme: "hysteria2".into(),
+        }]
+    }
 
     fn rendered(eps: &[Endpoint], meta: bool) -> String {
         String::from_utf8(render(eps, meta, None).expect("dialect renders these").body).unwrap()
@@ -181,6 +248,7 @@ mod tests {
         let profile = ClashProfile {
             selector: "NEXON".into(),
             auto: Some("\u{26a1}\u{fe0f} Auto".into()),
+            groups: Vec::new(),
             profile: "mode: rule\nrules:\n  - MATCH,NEXON".into(),
         };
         let out =
@@ -206,10 +274,73 @@ mod tests {
         let profile = ClashProfile {
             selector: "NEXON".into(),
             auto: None,
+            groups: Vec::new(),
             profile: "rules:\n  - MATCH,NEXON".into(),
         };
         let out = String::from_utf8(render(&[], true, Some(&profile)).unwrap().body).unwrap();
         assert!(out.contains("      - DIRECT"));
+    }
+
+    #[test]
+    fn meta_renders_hysteria2_without_a_transport() {
+        let out = rendered(&[sample_hysteria()], true);
+        assert!(out.contains("type: hysteria2"));
+        assert!(out.contains("port: 443"));
+        assert!(out.contains("password: \"00000000-0000-0000-0000-000000000001\""));
+        assert!(out.contains("sni: \"example.test\""));
+        // QUIC carries its own TLS: none of the stream-transport keys apply.
+        for absent in [
+            "network:",
+            "tls: true",
+            "servername:",
+            "client-fingerprint:",
+        ] {
+            assert!(!out.contains(absent), "{absent}");
+        }
+    }
+
+    #[test]
+    fn plain_clash_cannot_express_hysteria2_either() {
+        assert!(render(&[sample_hysteria()], false, None).is_none());
+    }
+
+    #[test]
+    fn a_scheme_group_holds_only_that_scheme() {
+        let eps = [sample(), sample_hysteria()];
+        let out = String::from_utf8(
+            render(&eps, true, Some(&profile(udp_group())))
+                .unwrap()
+                .body,
+        )
+        .unwrap();
+        let group = out
+            .split("  - name: \"NEXON-UDP\"")
+            .nth(1)
+            .expect("the group is emitted");
+        assert!(group.contains("      - \"🇸🇪 stockholm udp\""));
+        // The reality endpoint belongs to the main selector, not this one.
+        assert!(!group.contains("      - \"🇸🇪 stockholm\"\n"));
+    }
+
+    #[test]
+    fn a_scheme_group_with_no_members_falls_back_to_the_selector() {
+        // A user whose group has no hysteria inbound still gets a loadable
+        // document: the rules name NEXON-UDP either way.
+        let out = String::from_utf8(
+            render(&[sample()], true, Some(&profile(udp_group())))
+                .unwrap()
+                .body,
+        )
+        .unwrap();
+        let group = out.split("  - name: \"NEXON-UDP\"").nth(1).unwrap();
+        assert!(group.contains("      - \"NEXON\""));
+    }
+
+    #[test]
+    fn two_inbounds_of_one_node_do_not_collide() {
+        let out = rendered(&[sample(), sample_hysteria()], true);
+        assert!(out.contains("name: \"🇸🇪 stockholm\"\n"));
+        assert!(out.contains("name: \"🇸🇪 stockholm udp\"\n"));
     }
 
     #[test]

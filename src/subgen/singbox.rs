@@ -42,6 +42,23 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
             "server_port": ep.port,
             "password": ep.uuid,
         }),
+        // Returned whole: hysteria2 carries its own QUIC TLS, so none of the
+        // uTLS/reality tail below applies to it.
+        "hysteria2" | "hy2" => {
+            return Some(json!({
+                "type": "hysteria2",
+                "tag": ep.label(),
+                "server": ep.address,
+                "server_port": ep.port,
+                "password": ep.uuid,
+                "tls": {
+                    "enabled": true,
+                    "server_name": ep.sni(),
+                    "insecure": ep.param("insecure") == "1",
+                    "alpn": ["h3"],
+                },
+            }));
+        }
         _ => return None,
     };
     let map = ob.as_object_mut()?;
@@ -72,7 +89,7 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subgen::tests::sample;
+    use crate::subgen::tests::{sample, sample_hysteria};
 
     #[test]
     fn renders_a_reality_outbound_and_selector() {
@@ -87,5 +104,21 @@ mod tests {
         assert_eq!(obs[0]["tls"]["utls"]["fingerprint"], "chrome");
         assert_eq!(obs[1]["type"], "selector");
         assert_eq!(obs[1]["outbounds"][0], "🇸🇪 stockholm");
+    }
+
+    #[test]
+    fn renders_a_hysteria2_outbound() {
+        let out = render(&[sample_hysteria()]);
+        let doc: Value = serde_json::from_slice(&out.body).unwrap();
+        let ob = &doc["outbounds"][0];
+        assert_eq!(ob["type"], "hysteria2");
+        assert_eq!(ob["tag"], "\u{1f1f8}\u{1f1ea} stockholm udp");
+        assert_eq!(ob["server_port"], 443);
+        assert_eq!(ob["password"], "00000000-0000-0000-0000-000000000001");
+        assert_eq!(ob["tls"]["server_name"], "example.test");
+        assert_eq!(ob["tls"]["insecure"], false);
+        // No uTLS or reality on a QUIC protocol.
+        assert!(ob["tls"].get("utls").is_none());
+        assert!(ob["tls"].get("reality").is_none());
     }
 }

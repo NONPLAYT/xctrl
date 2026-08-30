@@ -35,6 +35,30 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
                 "password": ep.uuid,
             }],
         }),
+        // Xray spells the protocol "hysteria" and splits it in two: the server
+        // endpoint in settings, the credential in the transport. Both halves
+        // insist on version 2, and the core refuses the config otherwise.
+        "hysteria2" | "hy2" => {
+            return Some(json!({
+                "tag": ep.label(),
+                "protocol": "hysteria",
+                "settings": {
+                    "version": 2,
+                    "address": ep.address,
+                    "port": ep.port,
+                },
+                "streamSettings": {
+                    "network": "hysteria",
+                    "security": "tls",
+                    "tlsSettings": {
+                        "serverName": ep.sni(),
+                        "alpn": ["h3"],
+                        "allowInsecure": ep.param("insecure") == "1",
+                    },
+                    "hysteriaSettings": { "version": 2, "auth": ep.uuid },
+                },
+            }));
+        }
         _ => return None,
     };
 
@@ -70,7 +94,7 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subgen::tests::{sample, sample_user};
+    use crate::subgen::tests::{sample, sample_hysteria, sample_user};
 
     #[test]
     fn renders_a_reality_outbound() {
@@ -89,5 +113,24 @@ mod tests {
             "testpbk"
         );
         assert_eq!(ob["streamSettings"]["network"], "tcp");
+    }
+
+    #[test]
+    fn renders_a_hysteria_outbound_in_both_halves() {
+        let out = render(&sample_user(), &[sample_hysteria()]);
+        let doc: Value = serde_json::from_slice(&out.body).unwrap();
+        let ob = &doc["outbounds"][0];
+        // Xray names the protocol "hysteria" even though the link says hysteria2.
+        assert_eq!(ob["protocol"], "hysteria");
+        assert_eq!(ob["settings"]["version"], 2);
+        assert_eq!(ob["settings"]["port"], 443);
+        assert_eq!(ob["streamSettings"]["network"], "hysteria");
+        assert_eq!(ob["streamSettings"]["security"], "tls");
+        assert_eq!(ob["streamSettings"]["tlsSettings"]["alpn"][0], "h3");
+        assert_eq!(ob["streamSettings"]["hysteriaSettings"]["version"], 2);
+        assert_eq!(
+            ob["streamSettings"]["hysteriaSettings"]["auth"],
+            "00000000-0000-0000-0000-000000000001"
+        );
     }
 }

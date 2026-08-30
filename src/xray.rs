@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use prost::Message;
 use tonic::transport::{Channel, Endpoint};
 
@@ -17,7 +17,47 @@ use pb::xray::app::stats::command::stats_service_client::StatsServiceClient;
 use pb::xray::app::stats::command::{QueryStatsRequest, SysStatsRequest};
 use pb::xray::common::protocol::User;
 use pb::xray::common::serial::TypedMessage;
-use pb::xray::proxy::vless::Account;
+use pb::xray::proxy::hysteria::account::Account as HysteriaAccount;
+use pb::xray::proxy::vless::Account as VlessAccount;
+
+/// The account message an inbound expects, picked by its protocol.
+///
+/// Link building stays protocol-agnostic, but this cannot: xray types the
+/// account by protobuf message name, so a new protocol that carries users needs
+/// an arm here and its `.proto` in `build.rs`.
+pub enum Credential<'a> {
+    Vless { id: &'a str, flow: &'a str },
+    Hysteria { auth: &'a str },
+}
+
+impl Credential<'_> {
+    /// Reads the protocol off a link scheme, so the caller passes config rather
+    /// than a decision.
+    pub fn of<'a>(scheme: &str, secret: &'a str, flow: &'a str) -> Result<Credential<'a>> {
+        match scheme {
+            "vless" => Ok(Credential::Vless { id: secret, flow }),
+            "hysteria2" | "hy2" => Ok(Credential::Hysteria { auth: secret }),
+            other => Err(anyhow!("no account type known for scheme {other}")),
+        }
+    }
+
+    fn typed(&self) -> TypedMessage {
+        match *self {
+            Credential::Vless { id, flow } => typed(
+                "xray.proxy.vless.Account",
+                &VlessAccount {
+                    id: id.into(),
+                    flow: flow.into(),
+                    encryption: String::new(),
+                },
+            ),
+            Credential::Hysteria { auth } => typed(
+                "xray.proxy.hysteria.account.Account",
+                &HysteriaAccount { auth: auth.into() },
+            ),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Xray {
@@ -87,17 +127,12 @@ impl Xray {
         Ok(r.into_inner().users.into_iter().map(|u| u.email).collect())
     }
 
-    pub async fn add_user(&self, tag: &str, email: &str, id: &str, flow: &str) -> Result<()> {
-        let account = Account {
-            id: id.into(),
-            flow: flow.into(),
-            encryption: String::new(),
-        };
+    pub async fn add_user(&self, tag: &str, email: &str, credential: Credential<'_>) -> Result<()> {
         let op = AddUserOperation {
             user: Some(User {
                 level: 0,
                 email: email.into(),
-                account: Some(typed("xray.proxy.vless.Account", &account)),
+                account: Some(credential.typed()),
             }),
         };
         self.alter(

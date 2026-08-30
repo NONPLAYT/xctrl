@@ -3,6 +3,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "proto/app/stats/command/command.proto",
         "proto/app/proxyman/command/command.proto",
         "proto/proxy/vless/account.proto",
+        "proto/proxy/hysteria/account.proto",
     ];
     tonic_prost_build::configure()
         .build_server(false)
