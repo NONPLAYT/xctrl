@@ -33,7 +33,7 @@ pub fn render(eps: &[Endpoint]) -> Rendered {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subgen::tests::sample;
+    use crate::subgen::tests::{sample, sample_xhttp};
 
     #[test]
     fn builds_a_reality_uri() {
@@ -45,6 +45,15 @@ mod tests {
         // The label is percent-encoded in the fragment.
         assert!(uri.contains('#'));
         assert!(uri.ends_with("stockholm"));
+    }
+
+    #[test]
+    fn an_xhttp_uri_carries_its_transport() {
+        let uri = uri(&sample_xhttp());
+        assert!(uri.contains("type=xhttp"));
+        assert!(uri.contains("mode=packet-up"));
+        assert!(uri.contains("path=%2Fstatic%2Fmedia"));
+        assert!(!uri.contains("flow="));
     }
 
     #[test]

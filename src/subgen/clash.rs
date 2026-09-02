@@ -143,6 +143,11 @@ fn proxy(ep: &Endpoint, meta: bool) -> Option<String> {
             kv.insert(1, ("type", "hysteria2".into()));
             kv.push(("password", quote(&ep.uuid)));
             kv.push(("sni", quote(ep.sni())));
+            for (key, mbps) in [("up", ep.param("up")), ("down", ep.param("down"))] {
+                if !mbps.is_empty() {
+                    kv.push((key, quote(&format!("{mbps} Mbps"))));
+                }
+            }
             if ep.param("insecure") == "1" {
                 kv.push(("skip-cert-verify", "true".into()));
             }
@@ -161,6 +166,15 @@ fn proxy(ep: &Endpoint, meta: bool) -> Option<String> {
     }
     kv.push(("network", ep.network().into()));
     let mut block = block(&kv);
+    if ep.network() == "xhttp" {
+        block.push_str(&format!(
+            "\n    xhttp-opts:\n      path: {}",
+            quote(ep.param("path"))
+        ));
+        if !ep.param("mode").is_empty() {
+            block.push_str(&format!("\n      mode: {}", ep.param("mode")));
+        }
+    }
     if ep.is_reality() {
         if !meta {
             return None; // reality is a Meta-only extension
@@ -194,7 +208,7 @@ fn quote(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subgen::tests::{sample, sample_hysteria};
+    use crate::subgen::tests::{sample, sample_hysteria, sample_xhttp};
 
     fn profile(groups: Vec<ClashGroup>) -> ClashProfile {
         ClashProfile {
@@ -297,6 +311,26 @@ mod tests {
         ] {
             assert!(!out.contains(absent), "{absent}");
         }
+    }
+
+    #[test]
+    fn meta_renders_vless_over_xhttp() {
+        let out = rendered(&[sample_xhttp()], true);
+        assert!(out.contains("network: xhttp"));
+        assert!(
+            out.contains("    xhttp-opts:\n      path: \"/static/media\"\n      mode: packet-up")
+        );
+        // Vision is RAW-only, so an XHTTP endpoint must carry no flow at all.
+        assert!(!out.contains("flow:"));
+        // The transport changes, the REALITY handshake does not.
+        assert!(out.contains("reality-opts:"));
+    }
+
+    #[test]
+    fn hysteria2_carries_the_line_it_was_given() {
+        let out = rendered(&[sample_hysteria()], true);
+        assert!(out.contains("up: \"50 Mbps\""));
+        assert!(out.contains("down: \"100 Mbps\""));
     }
 
     #[test]

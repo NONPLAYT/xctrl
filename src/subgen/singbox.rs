@@ -28,6 +28,7 @@ pub fn render(eps: &[Endpoint]) -> Rendered {
 
 fn outbound(ep: &Endpoint) -> Option<Value> {
     let mut ob = match ep.scheme.as_str() {
+        "vless" if ep.network() != "tcp" => return None,
         "vless" => json!({
             "type": "vless",
             "tag": ep.label(),
@@ -45,7 +46,7 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
         // Returned whole: hysteria2 carries its own QUIC TLS, so none of the
         // uTLS/reality tail below applies to it.
         "hysteria2" | "hy2" => {
-            return Some(json!({
+            let mut ob = json!({
                 "type": "hysteria2",
                 "tag": ep.label(),
                 "server": ep.address,
@@ -57,7 +58,16 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
                     "insecure": ep.param("insecure") == "1",
                     "alpn": ["h3"],
                 },
-            }));
+            });
+            if let (Ok(up), Ok(down)) = (
+                ep.param("up").parse::<u32>(),
+                ep.param("down").parse::<u32>(),
+            ) {
+                let map = ob.as_object_mut()?;
+                map.insert("up_mbps".into(), json!(up));
+                map.insert("down_mbps".into(), json!(down));
+            }
+            return Some(ob);
         }
         _ => return None,
     };
@@ -89,7 +99,7 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subgen::tests::{sample, sample_hysteria};
+    use crate::subgen::tests::{sample, sample_hysteria, sample_xhttp};
 
     #[test]
     fn renders_a_reality_outbound_and_selector() {
@@ -107,6 +117,16 @@ mod tests {
     }
 
     #[test]
+    fn an_xhttp_endpoint_is_left_out_rather_than_mangled() {
+        let out = render(&[sample_xhttp(), sample_hysteria()]);
+        let doc: Value = serde_json::from_slice(&out.body).unwrap();
+        let obs = doc["outbounds"].as_array().unwrap();
+        assert_eq!(obs.len(), 2);
+        assert_eq!(obs[0]["type"], "hysteria2");
+        assert_eq!(obs[1]["outbounds"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
     fn renders_a_hysteria2_outbound() {
         let out = render(&[sample_hysteria()]);
         let doc: Value = serde_json::from_slice(&out.body).unwrap();
@@ -120,5 +140,7 @@ mod tests {
         // No uTLS or reality on a QUIC protocol.
         assert!(ob["tls"].get("utls").is_none());
         assert!(ob["tls"].get("reality").is_none());
+        assert_eq!(ob["up_mbps"], 50);
+        assert_eq!(ob["down_mbps"], 100);
     }
 }

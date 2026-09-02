@@ -39,6 +39,28 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
         // endpoint in settings, the credential in the transport. Both halves
         // insist on version 2, and the core refuses the config otherwise.
         "hysteria2" | "hy2" => {
+            let mut stream = json!({
+                "network": "hysteria",
+                "security": "tls",
+                "tlsSettings": {
+                    "serverName": ep.sni(),
+                    "alpn": ["h3"],
+                    "allowInsecure": ep.param("insecure") == "1",
+                },
+                "hysteriaSettings": { "version": 2, "auth": ep.uuid },
+            });
+            if !ep.param("up").is_empty() && !ep.param("down").is_empty() {
+                stream.as_object_mut()?.insert(
+                    "finalmask".into(),
+                    json!({
+                        "quicParams": {
+                            "congestion": "brutal",
+                            "brutalUp": format!("{} mbps", ep.param("up")),
+                            "brutalDown": format!("{} mbps", ep.param("down")),
+                        },
+                    }),
+                );
+            }
             return Some(json!({
                 "tag": ep.label(),
                 "protocol": "hysteria",
@@ -47,16 +69,7 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
                     "address": ep.address,
                     "port": ep.port,
                 },
-                "streamSettings": {
-                    "network": "hysteria",
-                    "security": "tls",
-                    "tlsSettings": {
-                        "serverName": ep.sni(),
-                        "alpn": ["h3"],
-                        "allowInsecure": ep.param("insecure") == "1",
-                    },
-                    "hysteriaSettings": { "version": 2, "auth": ep.uuid },
-                },
+                "streamSettings": stream,
             }));
         }
         _ => return None,
@@ -64,6 +77,15 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
 
     let mut stream = json!({ "network": ep.network() });
     let map = stream.as_object_mut()?;
+    if ep.network() == "xhttp" {
+        let mut xhttp = json!({ "path": ep.param("path") });
+        if !ep.param("mode").is_empty() {
+            xhttp
+                .as_object_mut()?
+                .insert("mode".into(), json!(ep.param("mode")));
+        }
+        map.insert("xhttpSettings".into(), xhttp);
+    }
     if ep.is_reality() {
         map.insert("security".into(), json!("reality"));
         map.insert(
@@ -94,7 +116,7 @@ fn outbound(ep: &Endpoint) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::subgen::tests::{sample, sample_hysteria, sample_user};
+    use crate::subgen::tests::{sample, sample_hysteria, sample_user, sample_xhttp};
 
     #[test]
     fn renders_a_reality_outbound() {
@@ -116,6 +138,23 @@ mod tests {
     }
 
     #[test]
+    fn an_xhttp_outbound_pins_its_mode() {
+        let out = render(&sample_user(), &[sample_xhttp()]);
+        let doc: Value = serde_json::from_slice(&out.body).unwrap();
+        let stream = &doc["outbounds"][0]["streamSettings"];
+        assert_eq!(stream["network"], "xhttp");
+        assert_eq!(stream["xhttpSettings"]["path"], "/static/media");
+        // Without this xray would read the unset mode as auto and, behind
+        // REALITY, fall back to stream-one.
+        assert_eq!(stream["xhttpSettings"]["mode"], "packet-up");
+        assert_eq!(stream["security"], "reality");
+        assert_eq!(
+            doc["outbounds"][0]["settings"]["vnext"][0]["users"][0]["flow"],
+            ""
+        );
+    }
+
+    #[test]
     fn renders_a_hysteria_outbound_in_both_halves() {
         let out = render(&sample_user(), &[sample_hysteria()]);
         let doc: Value = serde_json::from_slice(&out.body).unwrap();
@@ -132,5 +171,9 @@ mod tests {
             ob["streamSettings"]["hysteriaSettings"]["auth"],
             "00000000-0000-0000-0000-000000000001"
         );
+        let quic = &ob["streamSettings"]["finalmask"]["quicParams"];
+        assert_eq!(quic["congestion"], "brutal");
+        assert_eq!(quic["brutalUp"], "50 mbps");
+        assert_eq!(quic["brutalDown"], "100 mbps");
     }
 }

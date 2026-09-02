@@ -183,6 +183,19 @@ pub(crate) mod tests {
         }
     }
 
+    pub fn sample_xhttp() -> Endpoint {
+        let mut ep = sample();
+        ep.params.remove("flow");
+        for (k, v) in [
+            ("type", "xhttp"),
+            ("mode", "packet-up"),
+            ("path", "/static/media"),
+        ] {
+            ep.params.insert(k.to_string(), v.to_string());
+        }
+        ep
+    }
+
     /// The second inbound of the same node: hysteria2 beside the reality one,
     /// carrying the suffix that keeps the two labels apart.
     pub fn sample_hysteria() -> Endpoint {
@@ -194,7 +207,7 @@ pub(crate) mod tests {
             address: "203.0.113.7".into(),
             port: 443,
             uuid: "00000000-0000-0000-0000-000000000001".into(),
-            params: [("sni", "example.test")]
+            params: [("sni", "example.test"), ("up", "50"), ("down", "100")]
                 .into_iter()
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
@@ -240,10 +253,12 @@ pub(crate) mod tests {
                   "inbounds": [
                     { "group": "main", "tag": "vless-main",
                       "link": { "scheme": "vless", "port": 8443,
-                                "params": { "security": "reality", "flow": "xtls-rprx-vision" } } },
+                                "params": { "security": "reality", "type": "xhttp",
+                                            "mode": "packet-up", "path": "/static/media" } } },
                     { "group": "main", "tag": "hysteria-main", "suffix": "udp",
                       "link": { "scheme": "hysteria2", "port": 443,
-                                "params": { "sni": "stockholm.example.test" } } }
+                                "params": { "sni": "stockholm.example.test",
+                                            "up": "50", "down": "100" } } }
                   ]
                 },
                 {
@@ -288,9 +303,11 @@ pub(crate) mod tests {
         let mine = build_endpoints(&cfg, cfg.user("me").unwrap(), address_of);
         assert_eq!(mine.len(), 2);
         assert!(mine.iter().all(|ep| ep.node == "stockholm"));
-        assert_eq!(mine[0].param("flow"), "xtls-rprx-vision");
+        assert_eq!(mine[0].network(), "xhttp");
+        assert_eq!(mine[0].param("mode"), "packet-up");
         assert_eq!(mine[0].label(), "🇸🇪 stockholm");
         assert_eq!(mine[1].scheme, "hysteria2");
+        assert_eq!(mine[1].param("down"), "100");
         assert_eq!(mine[1].label(), "🇸🇪 stockholm udp");
 
         let theirs = build_endpoints(&cfg, cfg.user("buddy").unwrap(), address_of);
