@@ -148,6 +148,14 @@ fn proxy(ep: &Endpoint, meta: bool) -> Option<String> {
                     kv.push((key, quote(&format!("{mbps} Mbps"))));
                 }
             }
+            // mihomo splits a UDP packet by this number alone, never by what
+            // the server allows, and its default sits just under a video
+            // packet -- so a stream arrives in fragments that the far end
+            // reassembles one packet at a time. Only worth raising against a
+            // server that accepts the larger frame.
+            if !ep.param("mtu").is_empty() {
+                kv.push(("udp-mtu", ep.param("mtu").into()));
+            }
             if ep.param("insecure") == "1" {
                 kv.push(("skip-cert-verify", "true".into()));
             }
@@ -331,6 +339,7 @@ mod tests {
         let out = rendered(&[sample_hysteria()], true);
         assert!(out.contains("up: \"50 Mbps\""));
         assert!(out.contains("down: \"100 Mbps\""));
+        assert!(out.contains("udp-mtu: 1300"));
     }
 
     #[test]

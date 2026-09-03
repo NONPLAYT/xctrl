@@ -207,10 +207,15 @@ pub(crate) mod tests {
             address: "203.0.113.7".into(),
             port: 443,
             uuid: "00000000-0000-0000-0000-000000000001".into(),
-            params: [("sni", "example.test"), ("up", "50"), ("down", "100")]
-                .into_iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
+            params: [
+                ("sni", "example.test"),
+                ("up", "50"),
+                ("down", "100"),
+                ("mtu", "1300"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
         }
     }
 
@@ -258,7 +263,8 @@ pub(crate) mod tests {
                     { "group": "main", "tag": "hysteria-main", "suffix": "udp",
                       "link": { "scheme": "hysteria2", "port": 443,
                                 "params": { "sni": "stockholm.example.test",
-                                            "up": "50", "down": "100" } } }
+                                            "up": "50", "down": "100",
+                                            "mtu": "1300" } } }
                   ]
                 },
                 {
