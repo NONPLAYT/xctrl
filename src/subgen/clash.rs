@@ -170,7 +170,12 @@ fn proxy(ep: &Endpoint, meta: bool) -> Option<String> {
     if ep.is_tls() {
         kv.push(("tls", "true".into()));
         kv.push(("servername", quote(ep.sni())));
-        kv.push(("client-fingerprint", ep.fingerprint().into()));
+        let fp = if ep.is_reality() {
+            "chrome"
+        } else {
+            ep.fingerprint()
+        };
+        kv.push(("client-fingerprint", fp.into()));
     }
     kv.push(("network", ep.network().into()));
     let mut block = block(&kv);
@@ -188,7 +193,7 @@ fn proxy(ep: &Endpoint, meta: bool) -> Option<String> {
             return None; // reality is a Meta-only extension
         }
         block.push_str(&format!(
-            "\n    reality-opts:\n      public-key: {}\n      short-id: {}",
+            "\n    reality-opts:\n      public-key: {}\n      short-id: {}\n      support-x25519mlkem768: true",
             quote(ep.param("pbk")),
             quote(ep.param("sid"))
         ));
@@ -247,8 +252,18 @@ mod tests {
         assert!(out.contains("reality-opts:"));
         assert!(out.contains("public-key: \"testpbk\""));
         assert!(out.contains("short-id: \"testsid\""));
+        assert!(out.contains("support-x25519mlkem768: true"));
         assert!(out.contains("client-fingerprint: chrome"));
         assert!(out.contains("MATCH,XCTRL"));
+    }
+
+    #[test]
+    fn meta_pins_chrome_for_reality() {
+        let mut ep = sample();
+        ep.params.insert("fp".into(), "firefox".into());
+        let out = rendered(&[ep], true);
+        assert!(out.contains("client-fingerprint: chrome"));
+        assert!(!out.contains("firefox"));
     }
 
     #[test]
