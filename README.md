@@ -12,7 +12,7 @@ That makes this deliberately unportable: it is built for NixOS and assumes sops-
 |---|---|---|
 | `xctrl agent` | every node | projects the user list onto the local xray over gRPC, collects traffic |
 | `xctrl serve` | one host | polls agents, sums traffic fleet-wide, enforces quotas, serves subscriptions |
-| `xctrl ls\|status\|sync\|block\|unblock\|export` | anywhere with the token | management over the agents' HTTP API |
+| `xctrl ls\|status\|sync\|block\|unblock\|export\|stats\|subs` | anywhere with the token | management over the agents' HTTP API |
 
 ## Groups
 
@@ -23,6 +23,13 @@ A group is a tenant: a set of users served by a set of node inbounds. Two groups
 Per-user byte limits, written the way humans write them (`"200G"`), or `"unlimited"` to opt out of the group default. Exhausting the limit removes the user from every inbound until the period rolls over. A user may also carry an `expires` date, after which they are cut off for good — a new period resets traffic, not validity.
 
 The reset boundary is a day of the month (1–31, clamped to the last day of shorter months) at a fixed hour, pinned to a **fixed UTC offset** from the config rather than host local time — nodes in different timezones must agree on the boundary, and a DST shift must not move it.
+
+## Statistics
+
+The controller keeps two files beside the ledger, both for reading only — quotas never look at them:
+
+- `history.json` — every byte the ledger absorbs, also bucketed per hour, per user and per node. Hours older than 14 days fold into days (in the quota offset); days are kept for ~400 days. `xctrl stats` shows everyone's last hour / day / week with their busiest hour and a per-day table; `xctrl stats <user> [--days N] [--hours N]` breaks one user down.
+- `fetches.json` — who pulled each subscription: per user, the distinct address + User-Agent pairs (up to 32, most recent first) with first/last seen, count and the format served. The address comes from nginx's `X-Real-IP`. `xctrl subs [user]` prints it; one token showing up from many addresses is a shared subscription.
 
 ## Subscriptions
 

@@ -3,7 +3,7 @@ use chrono::{DateTime, Datelike, FixedOffset, NaiveDate, NaiveTime, TimeZone, Ut
 use crate::config::Quota;
 
 impl Quota {
-    fn tz(&self) -> FixedOffset {
+    pub(crate) fn tz(&self) -> FixedOffset {
         FixedOffset::east_opt(self.reset_utc_offset_hours * 3600)
             .unwrap_or_else(|| FixedOffset::east_opt(0).expect("utc is a valid offset"))
     }
@@ -41,6 +41,18 @@ impl Quota {
     pub fn render_local(&self, at: DateTime<Utc>) -> String {
         at.with_timezone(&self.tz())
             .format("%d.%m.%Y %H:%M (UTC%:z)")
+            .to_string()
+    }
+
+    /// Calendar date of an instant in the quota offset.
+    pub fn local_date(&self, at: DateTime<Utc>) -> NaiveDate {
+        at.with_timezone(&self.tz()).date_naive()
+    }
+
+    /// `dd.mm HH:MM` in the quota offset, for dense tables.
+    pub fn render_short(&self, at: DateTime<Utc>) -> String {
+        at.with_timezone(&self.tz())
+            .format("%d.%m %H:%M")
             .to_string()
     }
 

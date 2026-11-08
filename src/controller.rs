@@ -10,6 +10,7 @@ use tokio::sync::RwLock;
 use crate::config::Config;
 use crate::remote;
 use crate::state::{self, Ledger, Traffic, Usage};
+use crate::stats::{self, Fetches, History};
 
 const LEDGER_FILE: &str = "ledger.json";
 const POLL: Duration = Duration::from_secs(60);
@@ -20,6 +21,10 @@ pub struct Controller {
     pub ledger: RwLock<Ledger>,
     /// Last snapshot from each node, for display only.
     pub nodes: RwLock<BTreeMap<String, Usage>>,
+    /// Where the ledger's bytes came from over time. Display only.
+    pub history: RwLock<History>,
+    /// Who fetched which subscription. Display only.
+    pub fetches: RwLock<Fetches>,
 }
 
 impl Controller {
@@ -29,6 +34,8 @@ impl Controller {
             client: remote::client()?,
             ledger: RwLock::new(ledger),
             nodes: RwLock::new(BTreeMap::new()),
+            history: RwLock::new(state::load(&cfg.state_dir, stats::HISTORY_FILE)),
+            fetches: RwLock::new(state::load(&cfg.state_dir, stats::FETCHES_FILE)),
             cfg,
         }))
     }
@@ -46,14 +53,36 @@ impl Controller {
     /// Pulls counters from every node. A node being down is not fatal — its
     /// numbers simply do not advance until it comes back.
     async fn collect(&self) {
+        let now = Utc::now();
+        let mut collected = Vec::new();
         for node in &self.cfg.nodes {
             match remote::fetch_usage(&self.client, &self.cfg, node).await {
                 Ok(usage) => {
-                    self.ledger.write().await.absorb(&node.name, &usage);
+                    let rises = self.ledger.write().await.absorb(&node.name, &usage);
+                    collected.push((node.name.as_str(), rises));
                     self.nodes.write().await.insert(node.name.clone(), usage);
                 }
                 Err(e) => eprintln!("traffic {}: {e:#}", node.name),
             }
+        }
+        // History is insight, not accounting: failing to persist it must not
+        // stop the cycle that enforces quotas.
+        let mut history = self.history.write().await;
+        for (node, rises) in &collected {
+            history.record(node, rises, now);
+        }
+        history.compact(&self.cfg.quota, now);
+        if let Err(e) = state::save(&self.cfg.state_dir, stats::HISTORY_FILE, &*history) {
+            eprintln!("save history: {e:#}");
+        }
+    }
+
+    /// Notes a subscription fetch. Best effort, like the history.
+    pub async fn record_fetch(&self, user: &str, ip: &str, ua: &str, format: &str) {
+        let mut fetches = self.fetches.write().await;
+        fetches.record(user, ip, ua, format, Utc::now());
+        if let Err(e) = state::save(&self.cfg.state_dir, stats::FETCHES_FILE, &*fetches) {
+            eprintln!("save fetches: {e:#}");
         }
     }
 

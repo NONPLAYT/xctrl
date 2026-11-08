@@ -80,6 +80,8 @@ async fn admin(app: Arc<App>) {
     let listen = app.ctl.cfg.admin_listen.clone();
     let router = Router::new()
         .route("/ledger", get(ledger))
+        .route("/history", get(history))
+        .route("/fetches", get(fetches))
         .route("/status", get(status))
         .route("/block", post(block))
         .route("/unblock", post(unblock))
@@ -127,6 +129,14 @@ async fn ledger(State(app): State<Arc<App>>) -> Response {
         "next_reset": app.ctl.cfg.quota.next_reset(chrono::Utc::now()),
     }))
     .into_response()
+}
+
+async fn history(State(app): State<Arc<App>>) -> Response {
+    Json(app.ctl.history.read().await.clone()).into_response()
+}
+
+async fn fetches(State(app): State<Arc<App>>) -> Response {
+    Json(app.ctl.fetches.read().await.clone()).into_response()
 }
 
 async fn status(State(app): State<Arc<App>>) -> Response {
@@ -203,16 +213,27 @@ async fn subscription(
             .to_string()
     };
     let ua = header_of(header::USER_AGENT);
+    let ip = client_ip(&headers);
 
     let pinned = query.format.as_deref().and_then(detect::Format::parse);
     if pinned.is_none()
         && (detect::is_browser(&ua) || header_of(header::ACCEPT).contains("text/html"))
     {
+        app.ctl
+            .record_fetch(&user.name, &ip, &ua, "dashboard")
+            .await;
         return dashboard(&app, user, &sub_url, &endpoints, cut_off).await;
     }
 
     let format = pinned.unwrap_or_else(|| detect::detect(&ua));
-    eprintln!("sub {} -> {} (ua: {ua})", user.name, format.as_str());
+    eprintln!(
+        "sub {} -> {} (ip: {ip}, ua: {ua})",
+        user.name,
+        format.as_str()
+    );
+    app.ctl
+        .record_fetch(&user.name, &ip, &ua, format.as_str())
+        .await;
     let rendered = subgen::render(cfg, format, user, &endpoints);
     let spent = app.ctl.spent_by(&user.name).await;
     let limit = cfg.limit_of(user).unwrap_or(0);
@@ -248,6 +269,25 @@ async fn subscription(
         rendered.body,
     )
         .into_response()
+}
+
+/// The subscriber's address as the fronting nginx saw it. The server binds
+/// loopback only, so these headers come from nginx, not from the client:
+/// `X-Real-IP` is its `$remote_addr`, and the rightmost `X-Forwarded-For`
+/// hop is the one it appended.
+fn client_ip(headers: &HeaderMap) -> String {
+    let get = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
+    get("x-real-ip")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            get("x-forwarded-for")
+                .and_then(|v| v.rsplit(',').next())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or("-")
+        .to_string()
 }
 
 fn profile_title(cfg: &Config, user: &User, cut_off: bool) -> String {
@@ -361,6 +401,31 @@ mod tests {
         let mut c = crate::subgen::tests::sample_config();
         c.title = title.map(str::to_string);
         c
+    }
+
+    fn headers(pairs: &[(&'static str, &'static str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(*k, v.parse().unwrap());
+        }
+        h
+    }
+
+    #[test]
+    fn client_ip_prefers_the_real_ip_header() {
+        let h = headers(&[
+            ("x-real-ip", "192.0.2.10"),
+            ("x-forwarded-for", "203.0.113.1, 192.0.2.10"),
+        ]);
+        assert_eq!(client_ip(&h), "192.0.2.10");
+    }
+
+    #[test]
+    fn client_ip_trusts_only_the_last_forwarded_hop() {
+        // The client can put anything in front; nginx appends the real peer.
+        let h = headers(&[("x-forwarded-for", "203.0.113.1, 192.0.2.10")]);
+        assert_eq!(client_ip(&h), "192.0.2.10");
+        assert_eq!(client_ip(&HeaderMap::new()), "-");
     }
 
     #[test]

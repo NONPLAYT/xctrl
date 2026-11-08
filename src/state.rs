@@ -24,7 +24,7 @@ impl Traffic {
         }
     }
 
-    fn add(&mut self, other: Traffic) {
+    pub fn add(&mut self, other: Traffic) {
         self.up += other.up;
         self.down += other.down;
     }
@@ -88,9 +88,10 @@ impl Ledger {
     }
 
     /// Folds one node's cumulative counters into the period totals, returning
-    /// the bytes added.
-    pub fn absorb(&mut self, node: &str, usage: &Usage) -> u64 {
-        let mut added = 0;
+    /// what each user added. The caller may record the rises elsewhere too, but
+    /// they are already counted here — this is the only place they are kept.
+    pub fn absorb(&mut self, node: &str, usage: &Usage) -> Vec<(String, Traffic)> {
+        let mut added = Vec::new();
         for (user, traffic) in &usage.users {
             let key = format!("{node}/{user}");
             let Some(previous) = self.baseline.insert(key, *traffic) else {
@@ -99,7 +100,7 @@ impl Ledger {
             let rise = traffic.since(&previous);
             if rise.total() > 0 {
                 self.spent.entry(user.clone()).or_default().add(rise);
-                added += rise.total();
+                added.push((user.clone(), rise));
             }
         }
         added
@@ -130,6 +131,10 @@ pub fn save<T: Serialize>(dir: &Path, name: &str, value: &T) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn added(rises: Vec<(String, Traffic)>) -> u64 {
+        rises.iter().map(|(_, t)| t.total()).sum()
+    }
+
     fn usage(pairs: &[(&str, u64, u64)]) -> Usage {
         Usage {
             users: pairs
@@ -153,7 +158,10 @@ mod tests {
         let mut ledger = Ledger::default();
         // The agent has been up far longer than this ledger; its history is
         // not traffic spent in the current period.
-        assert_eq!(ledger.absorb("stockholm", &usage(&[("me", 40, 60)])), 0);
+        assert_eq!(
+            added(ledger.absorb("stockholm", &usage(&[("me", 40, 60)]))),
+            0
+        );
         assert_eq!(ledger.spent_by("me").total(), 0);
     }
 
@@ -162,7 +170,10 @@ mod tests {
         let mut ledger = Ledger::default();
         ledger.absorb("stockholm", &usage(&[("me", 40, 60)]));
         // The node's counters are cumulative, so only the rise is period spend.
-        assert_eq!(ledger.absorb("stockholm", &usage(&[("me", 50, 80)])), 30);
+        assert_eq!(
+            added(ledger.absorb("stockholm", &usage(&[("me", 50, 80)]))),
+            30
+        );
         assert_eq!(ledger.spent_by("me").up, 10);
         assert_eq!(ledger.spent_by("me").down, 20);
     }
@@ -173,10 +184,16 @@ mod tests {
         ledger.absorb("stockholm", &usage(&[("me", 0, 0)]));
         ledger.absorb("stockholm", &usage(&[("me", 100, 400)]));
         // The agent lost its state file and starts counting from zero again.
-        assert_eq!(ledger.absorb("stockholm", &usage(&[("me", 5, 15)])), 0);
+        assert_eq!(
+            added(ledger.absorb("stockholm", &usage(&[("me", 5, 15)]))),
+            0
+        );
         assert_eq!(ledger.spent_by("me").total(), 500);
         // The baseline followed it down, so the next rise is counted normally.
-        assert_eq!(ledger.absorb("stockholm", &usage(&[("me", 10, 35)])), 25);
+        assert_eq!(
+            added(ledger.absorb("stockholm", &usage(&[("me", 10, 35)]))),
+            25
+        );
         assert_eq!(ledger.spent_by("me").total(), 525);
     }
 

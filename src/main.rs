@@ -7,6 +7,7 @@ mod quota;
 mod remote;
 mod serve;
 mod state;
+mod stats;
 mod subgen;
 mod xray;
 
@@ -49,6 +50,18 @@ enum Cmd {
     Unblock { user: String },
     /// Print a user's subscription URL and links.
     Export { user: String },
+    /// Traffic history: everyone at a glance, or one user hour by hour.
+    Stats {
+        user: Option<String>,
+        /// Days in the per-day table.
+        #[arg(long, default_value_t = 7)]
+        days: usize,
+        /// Hours in a user's per-hour table (at most 14 days are kept hourly).
+        #[arg(long, default_value_t = 24)]
+        hours: usize,
+    },
+    /// Who fetches subscriptions, from which addresses and clients.
+    Subs { user: Option<String> },
 }
 
 #[tokio::main]
@@ -64,5 +77,7 @@ async fn main() -> Result<()> {
         Cmd::Block { user } => cli::set_blocked(&cfg, &user, true).await,
         Cmd::Unblock { user } => cli::set_blocked(&cfg, &user, false).await,
         Cmd::Export { user } => cli::export(&cfg, &user).await,
+        Cmd::Stats { user, days, hours } => cli::stats(&cfg, user.as_deref(), days, hours).await,
+        Cmd::Subs { user } => cli::subs(&cfg, user.as_deref()).await,
     }
 }
